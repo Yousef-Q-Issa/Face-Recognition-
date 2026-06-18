@@ -9,8 +9,8 @@ import pickle
 import cv2
 import numpy as np
 from pathlib import Path
-from sklearn.metrics.pairwise import cosine_similarity
 import config
+import face_recognition
 
 
 # Initialize OpenCV DNN models
@@ -177,71 +177,51 @@ def save_encoded_faces(encodings, names):
 
 
 def recognize_faces_in_image(image, known_encodings, known_names):
-    """
-    Recognize faces in an image against known faces database
-    
-    Args:
-        image: Input image (numpy array, BGR format)
-        known_encodings: List of known face feature vectors
-        known_names: List of corresponding names
-    
-    Returns:
-        tuple: (face_locations, face_labels, face_distances)
-            - face_locations: List of (x, y, w, h) tuples (not scaled)
-            - face_labels: List of recognized names or "Unknown"
-            - face_distances: List of distances from known faces
-    """
-    # Detect faces in image
-    face_rects = detect_faces_opencv(image)
-    
+
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    face_locations_fr = face_recognition.face_locations(rgb_image)
+    face_encodings = face_recognition.face_encodings(
+        rgb_image,
+        face_locations_fr
+    )
+
     face_locations = []
     face_labels = []
     face_distances = []
-    
-    # If no known faces in database, label everything as "Unknown"
-    if len(known_encodings) == 0:
-        for rect in face_rects:
-            face_locations.append(rect)
-            face_labels.append("Unknown")
-            face_distances.append(1.0)
-        return face_locations, face_labels, face_distances
-    
-    # Extract and compare features for each detected face
-    for face_rect in face_rects:
-        features = extract_face_features(image, face_rect)
-        
-        if features is None:
-            face_locations.append(face_rect)
+
+    for (top, right, bottom, left), face_encoding in zip(
+        face_locations_fr,
+        face_encodings
+    ):
+
+        w = right - left
+        h = bottom - top
+
+        face_locations.append((left, top, w, h))
+
+        if len(known_encodings) == 0:
             face_labels.append("Unknown")
             face_distances.append(1.0)
             continue
-        
-        # Reshape for similarity calculation
-        features = features.reshape(1, -1)
-        known_encodings_arr = np.array(known_encodings)
-        
-        # Calculate cosine similarity
-        similarities = cosine_similarity(features, known_encodings_arr)[0]
-        
-        # Find best match
-        best_idx = np.argmax(similarities)
-        best_similarity = similarities[best_idx]
-        
-        # Convert similarity to distance (1 - similarity)
-        distance = 1.0 - best_similarity
-        
-        # Check if distance is below threshold
-        if distance <= config.TOLERANCE:
+
+        distances = face_recognition.face_distance(
+            known_encodings,
+            face_encoding
+        )
+
+        best_idx = np.argmin(distances)
+        best_distance = distances[best_idx]
+
+        if best_distance <= 0.6:
             label = known_names[best_idx]
         else:
             label = "Unknown"
-        
-        face_locations.append(face_rect)
-        face_labels.append(label)
-        face_distances.append(distance)
-    
-    return face_locations, face_labels, face_distances
 
+        face_labels.append(label)
+        face_distances.append(float(best_distance))
+
+    return face_locations, face_labels, face_distances
 
 def draw_face_boxes(image, face_locations, face_labels, show_distance=False, face_distances=None):
     """
